@@ -1,0 +1,386 @@
+// EduGeeks LMS - PostgreSQL Schema via Prisma ORM
+// Supports 10,000+ students, multiple teachers, multiple subjects
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum QuestionType {
+  MCQ
+  TRUE_FALSE
+  SHORT_ANSWER
+}
+
+enum ExamCategory {
+  CBSE
+  JEE
+  NEET
+  CUET
+}
+
+enum Grade {
+  CLASS_9
+  CLASS_10
+  CLASS_11
+  CLASS_12
+}
+
+// ─── USERS ────────────────────────────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  password        String?   // null for OAuth users
+  googleId        String?   @unique
+  avatar          String?
+  phone           String?
+  role            Role      @default(STUDENT)
+  grade           Grade?
+  isVerified      Boolean   @default(false)
+  verifyToken     String?
+  resetToken      String?
+  resetTokenExp   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  enrollments     Enrollment[]
+  progress        LectureProgress[]
+  testAttempts    TestAttempt[]
+  orders          Order[]
+  reviews         Review[]
+  notes           Note[]
+  doubts          Doubt[]
+  taughtCourses   Course[]   @relation("CourseInstructor")
+  blogPosts       BlogPost[]
+
+  @@index([email])
+  @@index([googleId])
+}
+
+// ─── CATEGORIES ───────────────────────────────────────────────────────────────
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  icon        String?
+  color       String?
+  description String?
+  createdAt   DateTime  @default(now())
+
+  courses     Course[]
+}
+
+// ─── COURSES ──────────────────────────────────────────────────────────────────
+
+model Course {
+  id              String        @id @default(cuid())
+  title           String
+  slug            String        @unique
+  description     String
+  shortDesc       String
+  thumbnail       String?
+  previewVideo    String?
+  price           Float
+  discountPrice   Float?
+  grade           Grade
+  examCategory    ExamCategory[]
+  subject         String
+  language        String        @default("Hindi/English")
+  duration        Int?          // in minutes
+  totalLectures   Int           @default(0)
+  isPublished     Boolean       @default(false)
+  isFeatured      Boolean       @default(false)
+  metaTitle       String?
+  metaDescription String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  instructorId    String
+  instructor      User          @relation("CourseInstructor", fields: [instructorId], references: [id])
+  categoryId      String
+  category        Category      @relation(fields: [categoryId], references: [id])
+  chapters        Chapter[]
+  enrollments     Enrollment[]
+  reviews         Review[]
+  tests           Test[]
+  orders          OrderItem[]
+
+  @@index([slug])
+  @@index([grade])
+  @@index([subject])
+  @@index([isPublished])
+}
+
+// ─── CHAPTERS ─────────────────────────────────────────────────────────────────
+
+model Chapter {
+  id          String    @id @default(cuid())
+  title       String
+  position    Int
+  isPublished Boolean   @default(false)
+  isFree      Boolean   @default(false)
+  courseId    String
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lectures    Lecture[]
+  createdAt   DateTime  @default(now())
+
+  @@index([courseId])
+}
+
+// ─── LECTURES ─────────────────────────────────────────────────────────────────
+
+model Lecture {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  position      Int
+  videoUrl      String?   // Vimeo / S3 URL
+  videoProvider String?   // "vimeo" | "s3" | "youtube"
+  videoDuration Int?      // seconds
+  notesUrl      String?   // PDF S3 URL
+  isPublished   Boolean   @default(false)
+  isFree        Boolean   @default(false)
+  chapterId     String
+  chapter       Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  progress      LectureProgress[]
+  createdAt     DateTime  @default(now())
+
+  @@index([chapterId])
+}
+
+// ─── ENROLLMENT ───────────────────────────────────────────────────────────────
+
+model Enrollment {
+  id          String           @id @default(cuid())
+  status      EnrollmentStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  enrolledAt  DateTime         @default(now())
+  completedAt DateTime?
+
+  userId      String
+  user        User    @relation(fields: [userId], references: [id])
+  courseId    String
+  course      Course  @relation(fields: [courseId], references: [id])
+  orderId     String?
+
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+}
+
+// ─── LECTURE PROGRESS ─────────────────────────────────────────────────────────
+
+model LectureProgress {
+  id          String   @id @default(cuid())
+  isCompleted Boolean  @default(false)
+  watchedTime Int      @default(0) // seconds
+  updatedAt   DateTime @updatedAt
+
+  userId      String
+  user        User    @relation(fields: [userId], references: [id])
+  lectureId   String
+  lecture     Lecture @relation(fields: [lectureId], references: [id])
+
+  @@unique([userId, lectureId])
+  @@index([userId])
+}
+
+// ─── TESTS ────────────────────────────────────────────────────────────────────
+
+model Test {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  duration    Int       // minutes
+  totalMarks  Int
+  passingMarks Int
+  isPublished Boolean   @default(false)
+  isMock      Boolean   @default(false) // full mock exam vs chapter test
+  courseId    String?
+  course      Course?   @relation(fields: [courseId], references: [id])
+  questions   Question[]
+  attempts    TestAttempt[]
+  createdAt   DateTime  @default(now())
+
+  @@index([courseId])
+}
+
+model Question {
+  id            String       @id @default(cuid())
+  text          String
+  type          QuestionType @default(MCQ)
+  options       Json?        // Array of option strings
+  correctAnswer String       // index for MCQ, text for others
+  explanation   String?
+  marks         Int          @default(1)
+  negativeMarks Float        @default(0)
+  testId        String
+  test          Test         @relation(fields: [testId], references: [id], onDelete: Cascade)
+  answers       Answer[]
+
+  @@index([testId])
+}
+
+model TestAttempt {
+  id          String    @id @default(cuid())
+  startedAt   DateTime  @default(now())
+  submittedAt DateTime?
+  score       Float?
+  percentage  Float?
+  timeTaken   Int?      // seconds
+  isPassed    Boolean?
+
+  userId      String
+  user        User    @relation(fields: [userId], references: [id])
+  testId      String
+  test        Test    @relation(fields: [testId], references: [id])
+  answers     Answer[]
+
+  @@index([userId])
+  @@index([testId])
+}
+
+model Answer {
+  id          String   @id @default(cuid())
+  givenAnswer String
+  isCorrect   Boolean
+  marksGiven  Float
+
+  attemptId   String
+  attempt     TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId  String
+  question    Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId])
+}
+
+// ─── ORDERS & PAYMENTS ────────────────────────────────────────────────────────
+
+model Order {
+  id              String        @id @default(cuid())
+  razorpayOrderId String?       @unique
+  amount          Float
+  currency        String        @default("INR")
+  status          PaymentStatus @default(PENDING)
+  paymentId       String?       // razorpay payment id after capture
+  receipt         String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  userId          String
+  user            User       @relation(fields: [userId], references: [id])
+  items           OrderItem[]
+
+  @@index([userId])
+  @@index([razorpayOrderId])
+}
+
+model OrderItem {
+  id       String @id @default(cuid())
+  price    Float
+  orderId  String
+  order    Order  @relation(fields: [orderId], references: [id])
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id])
+}
+
+// ─── REVIEWS ──────────────────────────────────────────────────────────────────
+
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int      // 1-5
+  comment   String?
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User   @relation(fields: [userId], references: [id])
+  courseId  String
+  course    Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+}
+
+// ─── NOTES ────────────────────────────────────────────────────────────────────
+
+model Note {
+  id        String   @id @default(cuid())
+  title     String
+  content   String?
+  lectureId String?
+  courseId  String?
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User   @relation(fields: [userId], references: [id])
+}
+
+// ─── DOUBTS ───────────────────────────────────────────────────────────────────
+
+model Doubt {
+  id          String   @id @default(cuid())
+  question    String
+  answer      String?
+  isResolved  Boolean  @default(false)
+  lectureId   String?
+  courseId    String?
+  createdAt   DateTime @default(now())
+
+  userId      String
+  user        User   @relation(fields: [userId], references: [id])
+}
+
+// ─── BLOG ─────────────────────────────────────────────────────────────────────
+
+model BlogPost {
+  id              String   @id @default(cuid())
+  title           String
+  slug            String   @unique
+  content         String
+  excerpt         String?
+  thumbnail       String?
+  category        String
+  tags            String[]
+  isPublished     Boolean  @default(false)
+  metaTitle       String?
+  metaDescription String?
+  publishedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  authorId        String
+  author          User   @relation(fields: [authorId], references: [id])
+
+  @@index([slug])
+  @@index([category])
+}
